@@ -44,8 +44,9 @@ class NBA(callbacks.Plugin):
         if not self.games:
             self.games = self._fetchgames()
         # now setup the empty channels dict.
+        self.close60 = {}
         self.channels = {}
-        self._loadpickle()  # load saved data.
+        self._loadpickle()  # load saved data into channels.
         # now setup the cron.
         def checknbacron():
             self.checknba(irc)
@@ -186,7 +187,7 @@ class NBA(callbacks.Plugin):
             gd[gameid] = {'dt':dt, 'hometeam':hometeam, 'homescore':homescore,
                           'awayteam':awayteam, 'awayscore':awayscore, 'status':status,
                           'statustext':statustext, 'statusclock':statusclock,
-                          'statusperiod':statusperiod, 'nbaid':nbaid }
+                          'statusperiod':statusperiod, 'nbaid':nbaid, 'gamedate':gamedate }
         # now return games.
         return gd
 
@@ -201,8 +202,8 @@ class NBA(callbacks.Plugin):
             return None
         # process json.
         jsonf = json.loads(html.decode('utf-8'))
-        games = jsonf['sports_content']['game']
-        if len(games) == 0:
+        game = jsonf['sports_content']['game']
+        if len(game) == 0:
             self.log.error("_finalgame :: I found no games in the json data.")
             return None
         # output dict.
@@ -218,9 +219,10 @@ class NBA(callbacks.Plugin):
             ptsl = sorted(game[var]['players']['player'], key=lambda t: int(t['points']), reverse=True)[0]  # sort by points
             astl = sorted(game[var]['players']['player'], key=lambda t: int(t['assists']), reverse=True)[0]  # sort by assists. below we sort by adding rebounds.
             rbll = sorted(game[var]['players']['player'], key=lambda x: (int(x['rebounds_offensive']) + int(x['rebounds_defensive'])), reverse=True)[0]
-            teamdict[team] = "FG% {1} :: 3PT% {2} :: FT% {3} :: TO {4} :: RB {5} :: LEADERS :: PTS {6} {7} :: AST {8} {9} :: RB {10} {11}".format(\
-                team, fgp, tpp, ftp, to, rb,  ptsl['last_name'], ptsl['points'], astl['last_name'], astl['assists'], rbll['last_name'],\
-                (int(rbll['rebounds_offensive'])+int(rbll['rebounds_defensive'])))
+            teamdict[team] = {'TEAM FG%':str(fgp), '3PT%':str(tpp), 'FT%':str(ftp), 'TEAM TO':str(to), 'TEAM RB':str(rb),
+                              'PTS':"{0} {1}".format(ptsl['last_name'], ptsl['points']),
+                              'AST':"{0} {1}".format(astl['last_name'], astl['assists']),
+                              'RB':"{0} {1}".format(rbll['last_name'], (int(rbll['rebounds_offensive'])+int(rbll['rebounds_defensive']))) }
         # return the dict.
         return teamdict
 
@@ -292,6 +294,13 @@ class NBA(callbacks.Plugin):
         ordinal = utils.str.ordinal(str(ev['statusperiod']))
         gamestr = self._boldleader(ev['awayteam'], ev['awayscore'], ev['hometeam'], ev['homescore'])
         mstr = "{0} :: End of {1} Qtr.".format(gamestr, ordinal)
+        return mstr
+
+    def _closegame(self, ev):
+        """Handle close game event."""
+
+        gamestr = self._boldleader(ev['awayteam'], ev['awayscore'], ev['hometeam'], ev['homescore'])
+        mstr = "{0} :: {1}".format(gamestr, ircutils.bold("Game is close in 4th quarter with under 1 minute remaining."))
         return mstr
 
     def _beginovertime(self, ev):
@@ -371,7 +380,7 @@ class NBA(callbacks.Plugin):
         NBA Scores.
         """
 
-        url = 'http://data.nba.com/data/10s/json/cms/noseason/scores/gametracker.json'
+        url = b64decode('aHR0cDovL2RhdGEubmJhLmNvbS9kYXRhLzEwcy9qc29uL2Ntcy9ub3NlYXNvbi9zY29yZXMvZ2FtZXRyYWNrZXIuanNvbg==')
         html = self._httpget(url)
         if not html:
             irc.reply("Error fetching: {0}".format(url))
@@ -380,19 +389,21 @@ class NBA(callbacks.Plugin):
         games = jsonf['sports_content']['game']
         scores = []
         for game in games:
+            gamestatus = int(game['period_time']['game_status'])
             awayteam = game['visitor']['abbreviation']
             awayscore = game['visitor']['score']
             hometeam = game['home']['abbreviation']
             homescore = game['home']['score']
             pstatus = game['period_time']['period_status']
             ptime = game['period_time']['game_clock']
-            scores.append("{0} {1} - {2} {3} :: {4} {5}".format(awayteam, awayscore, hometeam, homescore, pstatus, ptime))
+            if gamestatus in (1, 2):
+                scores.append("{0} {1} - {2} {3} :: {4} {5}".format(awayteam, awayscore, hometeam, homescore, pstatus, ptime))
 
         outstr = " | ".join([i for i in scores])
         irc.reply(outstr)
 
     nbascores = wrap(nbascores)
-    
+
     def checknbastatus(self, irc, msg, args):
         """
         Dummy command.
@@ -453,7 +464,7 @@ class NBA(callbacks.Plugin):
         Main loop.
         """
 
-        self.log.info("checknba: running")
+        # self.log.info("checknba: running")
         # before anything, check if nextcheck is set and is in the future.
         if self.nextcheck:  # set
             utcnow = self._utcnow()
@@ -493,29 +504,35 @@ class NBA(callbacks.Plugin):
                     if ((v['status'] == 2) and (games2[k]['status'] == 3)):  # 2-> 3 means the game ended.
                         mstr = self._endgame(games2[k])
                         self._post(irc, mstr)
+                        # delete any close60 key if present since the game is over.
+                        if k in self.close60:
+                             del self.close60[k]
                         # see if we can grab finalgame stats.
-                        finalgame = self._finalgame(v['nbaid'], v['gamedate'])
-                        if finalgame:  # we got it.
-                            for (fgk, fgv) in finalgame.items():  # expand the dict returned (k = teams, v= statlines)
-                                irc.reply("{0} :: {1}".format(fgk, fgv))
+                        finalgame = self._finalgame(v['gamedate'], v['nbaid'])
+                        if finalgame:  # we got it. iterate over the keys (teams) and expand values (statlines) for irc.
+                            for (fgk, fgv) in finalgame.items():
+                                irc.reply("{0} :: {1}".format(ircutils.bold(fgk), " :: ".join([ircutils.bold(ik) + " " + iv for (ik, iv) in fgv.items()])))
                 else:  # handle events that can only happen when the game is active on both fronts.
                     # START OF OVERTIME.
                     if ((v['statusperiod'] != games2[k]['statusperiod']) and (int(games2[k]['statusperiod']) > 4)):
                         mstr = self._beginovertime(games2[k])
                         self._post(irc, mstr)
-                    # END OF QUARTER. handle when we have statusclock changes and the new is 0.0 (ie: 4.0->0.0).
+                    # END OF QUARTER. (statusclock changed and the new is 0.0 (ie: 4.0->0.0))
                     if ((v['statusclock'] != games2[k]['statusclock']) and (games2[k]['statusclock'] == "0.0")):
                         # however, we need to make sure we do not call end of quarter for the 2nd (halftime handles below) or 4th if tied (OT handler)
-                        if ((v['statusperiod'] == 2) and (games2[k]['statusperiod'] != "2")): # 1, 3rd, etc.
+                        if ((v['statusperiod'] != 2) and (games2[k]['statusperiod'] != "2")): # 1, 3rd, etc.
                             mstr = self._endquarter(games2[k])
                             self._post(irc, mstr)
                         # below will only fire if 4th quarter and the score is not tied.
                         if ((games2[k]['statusperiod'] == 4) and (games2[k]['awayscore'] != games2[k]['homescore'])):
                             mstr = self._endquarter(games2[k])
                             self._post(irc, mstr)
-                    ## POSSIBLY HANDLE A CLOSE END OF GAME HERE.
-                    # if ((games2[k]['statusperiod'] > 3) and (self._gctosec(games2[k]['statusclock']) < 60):
-                    # also need to check if score is within 8
+                    # HANDLE NOTIFICATION IF THERE IS A CLOSE GAME.
+                    # if ((games2[k]['statusperiod'] > 3) and (self._gctosec(games2[k]['statusclock']) < 60) and (abs(games2[k]['awayscore']-games2[k]['homescore']) < 8)):
+                    #   if k not in self.close60:
+                    #       self.close60[k] = True  # set key so we do not repeat.
+                    #       mstr = self._closegame(games2[k])
+                    #       self._post(irc, mstr)
                     # monitor statustext changes for going in and out of halftime.
                     if (v['statustext'] != games2[k]['statustext']):
                         # GAME GOES TO HALFTIME.
