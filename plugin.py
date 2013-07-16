@@ -504,14 +504,16 @@ class NBA(callbacks.Plugin):
                     if ((v['status'] == 2) and (games2[k]['status'] == 3)):  # 2-> 3 means the game ended.
                         mstr = self._endgame(games2[k])
                         self._post(irc, mstr)
-                        # delete any close60 key if present since the game is over.
-                        if k in self.close60:
-                             del self.close60[k]
-                        # see if we can grab finalgame stats.
+                        # try and get finalgame info. print if we do.
                         finalgame = self._finalgame(v['gamedate'], v['nbaid'])
                         if finalgame:  # we got it. iterate over the keys (teams) and expand values (statlines) for irc.
                             for (fgk, fgv) in finalgame.items():
-                                irc.reply("{0} :: {1}".format(ircutils.bold(fgk), " :: ".join([ircutils.bold(ik) + " " + iv for (ik, iv) in fgv.items()])))
+                                fgtxt = "{0} :: {1}".format(ircutils.bold(fgk), " :: ".join([ircutils.bold(ik) + " " + iv for (ik, iv) in fgv.items()]))
+                                self._post(irc, fgtxt)
+                        # delete any close60 key if present since the game is over.
+                        #if k in self.close60:
+                        #     del self.close60[k]
+
                 else:  # handle events that can only happen when the game is active on both fronts.
                     # START OF OVERTIME.
                     if ((v['statusperiod'] != games2[k]['statusperiod']) and (int(games2[k]['statusperiod']) > 4)):
