@@ -206,26 +206,30 @@ class NBA(callbacks.Plugin):
         if len(game) == 0:
             self.log.error("_finalgame :: I found no games in the json data.")
             return None
-        # output dict.
-        teamdict = {}
-        # iterate over the home/visitor.
-        for var in ['visitor', 'home']:
-            team = game[var]['abbreviation']
-            fgp = game[var]['stats']['field_goals_percentage']
-            tpp = game[var]['stats']['three_pointers_percentage']
-            ftp = game[var]['stats']['free_throws_percentage']
-            to = game[var]['stats']['turnovers']
-            rb = (int(game[var]['stats']['rebounds_offensive'])+int(game[var]['stats']['rebounds_defensive']))  # total rb.
-            ptsl = sorted(game[var]['players']['player'], key=lambda t: int(t['points']), reverse=True)[0]  # sort by points
-            astl = sorted(game[var]['players']['player'], key=lambda t: int(t['assists']), reverse=True)[0]  # sort by assists. below we sort by adding rebounds.
-            rbll = sorted(game[var]['players']['player'], key=lambda x: (int(x['rebounds_offensive']) + int(x['rebounds_defensive'])), reverse=True)[0]
-            teamdict[team] = {'TEAM FG%':str(fgp), '3PT%':str(tpp), 'FT%':str(ftp), 'TEAM TO':str(to), 'TEAM RB':str(rb),
-                              'PTS':"{0} {1}".format(ptsl['last_name'], ptsl['points']),
-                              'AST':"{0} {1}".format(astl['last_name'], astl['assists']),
-                              'RB':"{0} {1}".format(rbll['last_name'], (int(rbll['rebounds_offensive'])+int(rbll['rebounds_defensive']))) }
-        # return the dict.
-        return teamdict
-
+        # throw this thing in a try/except block.
+        try:
+            # output dict.
+            teamdict = {}
+            # iterate over the home/visitor.
+            for var in ['visitor', 'home']:
+                team = game[var]['abbreviation']
+                fgp = game[var]['stats']['field_goals_percentage']
+                tpp = game[var]['stats']['three_pointers_percentage']
+                ftp = game[var]['stats']['free_throws_percentage']
+                to = game[var]['stats']['turnovers']
+                rb = (int(game[var]['stats']['rebounds_offensive'])+int(game[var]['stats']['rebounds_defensive']))  # total rb.
+                ptsl = sorted(game[var]['players']['player'], key=lambda t: int(t['points']), reverse=True)[0]  # sort by points
+                astl = sorted(game[var]['players']['player'], key=lambda t: int(t['assists']), reverse=True)[0]  # sort by assists. below we sort by adding rebounds.
+                rbll = sorted(game[var]['players']['player'], key=lambda x: (int(x['rebounds_offensive']) + int(x['rebounds_defensive'])), reverse=True)[0]
+                teamdict[team] = {'TEAM FG%':str(fgp), '3PT%':str(tpp), 'FT%':str(ftp), 'TEAM TO':str(to), 'TEAM RB':str(rb),
+                                  'PTS':"{0} {1}".format(ptsl['last_name'], ptsl['points']),
+                                  'AST':"{0} {1}".format(astl['last_name'], astl['assists']),
+                                  'RB':"{0} {1}".format(rbll['last_name'], (int(rbll['rebounds_offensive'])+int(rbll['rebounds_defensive']))) }
+            # return the dict.
+            return teamdict
+        except Exception, e:
+            self.log.error("_finalgame: ERROR on {0} {1} :: {2}".format(gamedate, gameid, e))
+            return None
 
     ###########################################
     # INTERNAL CHANNEL POSTING AND DELEGATION #
@@ -290,8 +294,7 @@ class NBA(callbacks.Plugin):
     def _endquarter(self, ev):
         """Handle end of quarter event."""
 
-        # convert the period into an ordinal like 1->1st. 2->2nd.
-        ordinal = utils.str.ordinal(str(ev['statusperiod']))
+        ordinal = utils.str.ordinal(str(ev['statusperiod']))  # converts period into ordinal (1->1st, 2->2nd).
         gamestr = self._boldleader(ev['awayteam'], ev['awayscore'], ev['hometeam'], ev['homescore'])
         mstr = "{0} :: End of {1} Qtr.".format(gamestr, ordinal)
         return mstr
@@ -306,9 +309,9 @@ class NBA(callbacks.Plugin):
     def _beginovertime(self, ev):
         """Handle start of overtime."""
 
-        otper = int(ev['statusperiod'])-4  # should start with 5, which is OT1.
+        otper = "Start OT{0}".format(int(ev['statusperiod'])-4)  # should start with 5, which is OT1.
         gamestr = self._boldleader(ev['awayteam'], ev['awayscore'], ev['hometeam'], ev['homescore'])
-        mstr = "{0} :: Start OT{1}".format(gamestr, otper)
+        mstr = "{0} :: Start OT{1}".format(gamestr, ircutils.mircColor(otper, 'green'))
         return mstr
 
     ###################
@@ -514,8 +517,8 @@ class NBA(callbacks.Plugin):
                                 fgtxt = "{0} :: {1}".format(ircutils.bold(fgk), " :: ".join([ircutils.bold(ik) + " " + str(iv) for (ik, iv) in fgv.items()]))
                                 self._post(irc, fgtxt)
                         # delete any close60 key if present since the game is over.
-                        #if k in self.close60:
-                        #     del self.close60[k]
+                        if k in self.close60:
+                            del self.close60[k]
                 # BELOW ARE EVENTS THAT CAN ONLY HAPPEN WHEN A GAME IS ACTIVE.
                 else:
                     # START OF OVERTIME.
@@ -534,7 +537,7 @@ class NBA(callbacks.Plugin):
                             self.log.info("firing _endquarter (should hit overtime)")
                             mstr = self._endquarter(games2[k])
                             self._post(irc, mstr)
-                    # monitor statustext changes for going in and out of halftime.
+                    # HANDLE GOING IN AND OUT OF HALFTIME.
                     if (v['statustext'] != games2[k]['statustext']):
                         # GAME GOES TO HALFTIME.
                         if (games2[k]['statustext'] == "Halftime"):
@@ -547,11 +550,11 @@ class NBA(callbacks.Plugin):
                             mstr = self._endhalftime(v)
                             self._post(irc, mstr)
                     # HANDLE NOTIFICATION IF THERE IS A CLOSE GAME.
-                    # if ((games2[k]['statusperiod'] > 3) and (self._gctosec(games2[k]['statusclock']) < 60) and (abs(games2[k]['awayscore']-games2[k]['homescore']) < 8)):
-                    #   if k not in self.close60:
-                    #       self.close60[k] = True  # set key so we do not repeat.
-                    #       mstr = self._closegame(games2[k])
-                    #       self._post(irc, mstr)
+                    if ((games2[k]['statusperiod'] > 3) and (self._gctosec(games2[k]['statusclock']) < 60) and (abs(games2[k]['awayscore']-games2[k]['homescore']) < 8)):
+                        if k not in self.close60:
+                            self.close60[k] = True  # set key so we do not repeat.
+                            mstr = self._closegame(games2[k])
+                            self._post(irc, mstr)
 
 
         # now that we're done. swap games2 into self.games so things reset.
