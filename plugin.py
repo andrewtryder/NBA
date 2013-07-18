@@ -103,7 +103,7 @@ class NBA(callbacks.Plugin):
         """Load channel data from pickle."""
 
         try:
-            datafile = open(conf.supybot.directories.data.dirize("NBA.pickle"), 'rb')
+            datafile = open(conf.supybot.directories.data.dirize(self.name()+".pickle"), 'rb')
             try:
                 dataset = pickle.load(datafile)
             finally:
@@ -119,7 +119,7 @@ class NBA(callbacks.Plugin):
 
         data = {"channels": self.channels}
         try:
-            datafile = open(conf.supybot.directories.data.dirize("NBA.pickle"), 'wb')
+            datafile = open(conf.supybot.directories.data.dirize(self.name()+".pickle"), 'wb')
             try:
                 pickle.dump(data, datafile)
             finally:
@@ -311,20 +311,21 @@ class NBA(callbacks.Plugin):
 
         otper = "Start OT{0}".format(int(ev['statusperiod'])-4)  # should start with 5, which is OT1.
         gamestr = self._boldleader(ev['awayteam'], ev['awayscore'], ev['hometeam'], ev['homescore'])
-        mstr = "{0} :: Start OT{1}".format(gamestr, ircutils.mircColor(otper, 'green'))
+        mstr = "{0} :: {1}".format(gamestr, ircutils.mircColor(otper, 'green'))
+        return mstr
+
+    def _endotquarter(self, ev):
+        """Handle end of overtime quarter event."""
+
+        statusperiod = int(ev['statusperiod'])-4
+        ordinal = utils.str.ordinal(str(statusperiod))  # converts period into ordinal (1->1st, 2->2nd).
+        gamestr = self._boldleader(ev['awayteam'], ev['awayscore'], ev['hometeam'], ev['homescore'])
+        mstr = "{0} :: End of {1} OT.".format(gamestr, ordinal)
         return mstr
 
     ###################
     # PUBLIC COMMANDS #
     ###################
-
-    def _chanstatus(self, chanst):
-        """Handle translating 0 and 1 into OFF and ON for nbachannel list."""
-
-        if chanst == 0:
-            return "OFF"
-        elif chanst == 1:
-            return "ON"
 
     def nbachannel(self, irc, msg, args, op, optchannel):
         """<add #channel|del #channel|list>
@@ -363,7 +364,10 @@ class NBA(callbacks.Plugin):
                 irc.reply("ERROR: I have no active channels defined. Please use the nbachannel add operation to add a channel.")
             else:   # we do have channels.
                 for (k, v) in self.channels.items():  # iterate through and output translated keys.
-                    irc.reply("{0} :: {1}".format(k, self._chanstatus(v)))
+                    if v == 0:  # swap 0/1 into OFF/ON.
+                        irc.reply("{0} :: OFF".format(k))
+                    elif v == 1:
+                        irc.reply("{0} :: ON".format(k))
         elif op == 'del':  # delete an item from channels.
             if optchannel in self.channels:  # id is already in.
                 del self.channels[optchannel]  # remove it.
@@ -442,21 +446,12 @@ class NBA(callbacks.Plugin):
             if gamestatus in (1, 2):
                 scores.append("{0} {1} - {2} {3} :: {4} {5}".format(awayteam, awayscore, hometeam, homescore, pstatus, ptime))
 
-        outstr = " | ".join([i for i in scores])
-        irc.reply(outstr)
+        if len(games) != 0:
+            irc.reply(" | ".join([i for i in scores]))
+        else:
+            irc.reply("No NBA games.")
 
     nbascores = wrap(nbascores)
-
-    def checknbastatus(self, irc, msg, args):
-        """
-        Dummy command.
-        """
-
-        irc.reply("NEXTCHECK: {0}".format(self.nextcheck))
-        irc.reply("GAMES: {0}".format(self.games))
-        irc.reply("CHANNELS: {0}".format(self.channels))
-
-    checknbastatus = wrap(checknbastatus)
 
     #############
     # MAIN LOOP #
@@ -467,7 +462,6 @@ class NBA(callbacks.Plugin):
         Main loop.
         """
 
-        # self.log.info("checknba: running")
         # before anything, check if nextcheck is set and is in the future.
         if self.nextcheck:  # set
             utcnow = self._utcnow()
@@ -476,19 +470,16 @@ class NBA(callbacks.Plugin):
             else:  # in the past so lets reset it. this means that we've reached the time where firstgametime should begin.
                 self.log.info("checknba: nextcheck has passed. we are resetting and continuing normal operations.")
                 self.nextcheck = None
-
         # we must have initial games. bail if not.
         if not self.games:
             self.games = self._fetchgames()
             return
-
         # check and see if we have initial games, again, but bail if no.
         if not self.games:
             self.log.error("checknba: I did not have any games in self.games")
             return
         else:  # setup the initial games.
             games1 = self.games
-
         # now we must grab the new status.
         games2 = self._fetchgames()
         if not games2:  # something went wrong so we bail.
@@ -502,70 +493,58 @@ class NBA(callbacks.Plugin):
                 # first, check for status changes.
                 if (v['status'] != games2[k]['status']):
                     if ((v['status'] == 1) and (games2[k]['status'] == 2)):  # 1-> 2 means the game started.
-                        self.log.info("firing _begingame")
                         mstr = self._begingame(games2[k])
                         self._post(irc, mstr)
                     elif ((v['status'] == 2) and (games2[k]['status'] == 3)):  # 2-> 3 means the game ended.
-                        self.log.info("firing _endgame.")
                         mstr = self._endgame(games2[k])
                         self._post(irc, mstr)
                         # try and get finalgame info. print if we do.
-                        self.log.info("firing finalgame.")
                         finalgame = self._finalgame(v['gamedate'], v['nbaid'])
                         if finalgame:  # we got it. iterate over the keys (teams) and expand values (statlines) for irc.
                             for (fgk, fgv) in finalgame.items():
                                 fgtxt = "{0} :: {1}".format(ircutils.bold(fgk), " :: ".join([ircutils.bold(ik) + " " + str(iv) for (ik, iv) in fgv.items()]))
                                 self._post(irc, fgtxt)
                         # delete any close60 key if present since the game is over.
-                        if k in self.close60:
-                            del self.close60[k]
+                        #if k in self.close60:
+                        #    del self.close60[k]
                 # BELOW ARE EVENTS THAT CAN ONLY HAPPEN WHEN A GAME IS ACTIVE.
-                else:
-                    # START OF OVERTIME.
+                elif ((v['status'] == 2) and (games2[k]['status'] == 2)):
+                    # START OF OVERTIME QUARTER.
                     if ((v['statusperiod'] != games2[k]['statusperiod']) and (int(games2[k]['statusperiod']) > 4)):
-                        self.log.info("firing _beginovertime")
                         mstr = self._beginovertime(games2[k])
                         self._post(irc, mstr)
-                    # END OF QUARTER. (statusclock changed and the new is 0.0 (ie: 4.0->0.0))
+                    # END OF QUARTER. (statusclock changed and the new is 0.0 (ie: 4.0->0.0)) but not for halftime.
                     if ((v['statusclock'] != games2[k]['statusclock']) and (games2[k]['statusclock'] == "0.0")):
-                        if ((v['statusperiod'] != 2) and (games2[k]['statusperiod'] != "2")): # 1, 3rd, etc.
-                            self.log.info("firing _endquarter.")
+                        if ((v['statusperiod'] != "2") and (games2[k]['statusperiod'] != "2") and (int(games2[k]['statusperiod']) < 4)): # 1, 3rd.
                             mstr = self._endquarter(games2[k])
                             self._post(irc, mstr)
-                        # below will only fire if 4th quarter and the score is not tied.
-                        if ((games2[k]['statusperiod'] == 4) and (games2[k]['awayscore'] != games2[k]['homescore'])):
-                            self.log.info("firing _endquarter (should hit overtime)")
-                            mstr = self._endquarter(games2[k])
+                        if (int(games2[k]['statusperiod']) > 4):  # this will only fire when a quarter ends but not end of game.
+                            mstr = self._endotquarter(games2[k])
                             self._post(irc, mstr)
                     # HANDLE GOING IN AND OUT OF HALFTIME.
                     if (v['statustext'] != games2[k]['statustext']):
                         # GAME GOES TO HALFTIME.
                         if (games2[k]['statustext'] == "Halftime"):
-                            self.log.info("HT.")
                             mstr = self._halftime(games2[k])
                             self._post(irc, mstr)
                         # GAME STARTS BACK FROM HALFTIME.
                         if (games2[k]['statustext'] == "3rd Qtr"):
-                            self.log.info("3rd qtr.")
                             mstr = self._endhalftime(v)
                             self._post(irc, mstr)
                     # HANDLE NOTIFICATION IF THERE IS A CLOSE GAME.
-                    if ((games2[k]['statusperiod'] > 3) and (self._gctosec(games2[k]['statusclock']) < 60) and (abs(games2[k]['awayscore']-games2[k]['homescore']) < 8)):
-                        if k not in self.close60:
-                            self.close60[k] = True  # set key so we do not repeat.
-                            mstr = self._closegame(games2[k])
-                            self._post(irc, mstr)
-
+                    if ((int(games2[k]['statusperiod']) > 3) and (self._gctosec(games2[k]['statusclock']) < 60)): #and (abs(games2[k]['awayscore']-games2[k]['homescore']) < 8)):
+                        self.log.info("in closegame.")
+                    #    if k not in self.close60:
+                    #        self.log.info("Firing close game.")
+                    #        self.close60[k] = True  # set key so we do not repeat.
+                    #        mstr = self._closegame(games2[k])
+                    #        self._post(irc, mstr)
 
         # now that we're done. swap games2 into self.games so things reset.
-        self.log.info("Copying games.")
         self.games = games2
         # we're now all done processing the games and resetting. next, we must determine when
         # the nextcheck will be. this is completely dependent on the games and their statuses.
         # there are three conditions that have to be checked and acted on accordingly.
-        # - active games (2 present): reset nextcheck and act normally
-        # - no active games but there are future (1 present): set nextcheck to it
-        # - all games final but no future games (all 3, no 1,2): standoff 10 minutes.
         gamestatuses = set([v['status'] for (k, v) in games2.items()])  # grab statuses from games and unique.
         # main loop.
         if 2 not in gamestatuses:  # True if no active games are going on.
@@ -573,14 +552,14 @@ class NBA(callbacks.Plugin):
                 firstgametime = sorted([v['dt'] for (k, v) in games2.items() if v['status'] == 1])[0]  # sort future games, return the earliest.
                 utcnow = self._utcnow()  # grab UTC now.
                 self.log.info("checknba: no active games right now. we will set nextcheck in the future.")
-                if utcnow > firstgametime:  # sanity check to make sure nextcheck is not stale.
+                if utcnow > firstgametime:  # sanity check to make sure nextcheck is not stale. ie: 8pm tip and its 8:01.
                     self.nextcheck = utcnow+60  # hold off for 60 seconds incase shit is fubar.
                     self.log.info("checknba: firstgametime has passed. setting next check for 60 seconds.")
                 else:  # firstgametime = future so we set it.
                     self.log.info("checknba: firstgametime is in the future. we're setting it {0} seconds from now.".format(firstgametime-utcnow))
                     self.nextcheck = firstgametime
             else:  # no 1 and no 2 so there is only 3 (final).
-                self.log.info("checknba: all games are final but I don't have future games. standing off 10 minutes.")
+                self.log.info("checknba: all games are final but I don't have future games. nextcheck in 10 minutes.")
                 self.nextcheck = utcnow+600
         else:  # we have activegames going on. all we do is erase any nextcheck and continue.
             self.nextcheck = None
