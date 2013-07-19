@@ -222,9 +222,9 @@ class NBA(callbacks.Plugin):
                 astl = sorted(game[var]['players']['player'], key=lambda t: int(t['assists']), reverse=True)[0]  # sort by assists. below we sort by adding rebounds.
                 rbll = sorted(game[var]['players']['player'], key=lambda x: (int(x['rebounds_offensive']) + int(x['rebounds_defensive'])), reverse=True)[0]
                 teamdict[team] = {'TEAM FG%':str(fgp), '3PT%':str(tpp), 'FT%':str(ftp), 'TEAM TO':str(to), 'TEAM RB':str(rb),
-                                  'PTS':"{0} {1}".format(ptsl['last_name'], ptsl['points']),
-                                  'AST':"{0} {1}".format(astl['last_name'], astl['assists']),
-                                  'RB':"{0} {1}".format(rbll['last_name'], (int(rbll['rebounds_offensive'])+int(rbll['rebounds_defensive']))) }
+                                  'PTS':"{0} {1}".format(ptsl['last_name'].encode('utf-8'), ptsl['points']),
+                                  'AST':"{0} {1}".format(astl['last_name'].encode('utf-8'), astl['assists']),
+                                  'RB':"{0} {1}".format(rbll['last_name'].encode('utf-8'), (int(rbll['rebounds_offensive'])+int(rbll['rebounds_defensive']))) }
             # return the dict.
             return teamdict
         except Exception, e:
