@@ -208,8 +208,8 @@ class NBA(callbacks.Plugin):
             return None
         # throw this thing in a try/except block.
         try:
-            # output dict.
-            teamdict = {}
+            # output dict. we preset DD/TD for later.
+            gamestats = {'Double-double':[], 'Triple-double':[]}
             # iterate over the home/visitor.
             for var in ['visitor', 'home']:
                 team = game[var]['abbreviation']
@@ -221,14 +221,36 @@ class NBA(callbacks.Plugin):
                 ptsl = sorted(game[var]['players']['player'], key=lambda t: int(t['points']), reverse=True)[0]  # sort by points
                 astl = sorted(game[var]['players']['player'], key=lambda t: int(t['assists']), reverse=True)[0]  # sort by assists. below we sort by adding rebounds.
                 rbll = sorted(game[var]['players']['player'], key=lambda x: (int(x['rebounds_offensive']) + int(x['rebounds_defensive'])), reverse=True)[0]
-                teamdict[team] = {'TEAM FG%':str(fgp), '3PT%':str(tpp), 'FT%':str(ftp), 'TEAM TO':str(to), 'TEAM RB':str(rb),
-                                  'PTS':"{0} {1}".format(ptsl['last_name'].encode('utf-8'), ptsl['points']),
-                                  'AST':"{0} {1}".format(astl['last_name'].encode('utf-8'), astl['assists']),
-                                  'RB':"{0} {1}".format(rbll['last_name'].encode('utf-8'), (int(rbll['rebounds_offensive'])+int(rbll['rebounds_defensive']))) }
+                # inject into our gamestats dict with the text.
+                gamestats[team] = "{0}: {1} {2}: {3} {4}: {5} {6}: {7} {8}: {9}  {10} :: {11} {12} {13} {14} {15} {16} {17} {18} {19}".format(\
+                      ircutils.bold("FG%"), fgp,
+                      ircutils.bold("FT%"), ftp,
+                      ircutils.bold("3PT%"), tpp,
+                      ircutils.bold("TO"), to,
+                      ircutils.bold("RB"), rb,
+                      ircutils.bold(ircutils.underline("LEADERS")),
+                      ircutils.bold("PTS"), ptsl['last_name'].encode('utf-8'), ptsl['points'],
+                      ircutils.bold("AST"), astl['last_name'].encode('utf-8'), astl['assists'],
+                      ircutils.bold("RB"), rbll['last_name'].encode('utf-8'), (int(rbll['rebounds_offensive'])+int(rbll['rebounds_defensive'])))
+                # look for DD/TD
+                for x in game[var]['players']['player']:  # iterate over.
+                    tmp = {}  # we make a dict with the key as the stat for later.
+                    tmp['rb'] = int(x['rebounds_offensive']) + int(x['rebounds_defensive'])
+                    tmp['blocks'] = int(x['blocks'])
+                    tmp['a'] = int(x['assists'])
+                    tmp['p'] = int(x['points'])
+                    tmp['s'] = int(x['steals'])
+                    # we only inject into matching the category and stat if 10 or over.
+                    matching = [str(z.upper()) + ": " + str(p) for (z, p) in tmp.items() if p >= 10]
+                    if len(matching) == 2:  # dd. inject into gamestats in the right category.
+                        gamestats['Double-double'].append("{0}({1}) :: {2}".format(x['last_name'].encode('utf-8'), team, " | ".join(matching)))
+                    if len(matching) > 2:  # likewise with td.
+                        gamestats['Triple-double'].append("{0}({1}) :: {2}".format(x['last_name'].encode('utf-8'), team, " | ".join(matching)))
+
             # return the dict.
-            return teamdict
+            return gamestats
         except Exception, e:
-            self.log.error("_finalgame: ERROR on {0} {1} :: {2}".format(gamedate, gameid, e))
+            self.log.error("_finalgame: ERROR on {0} :: {1}".format(url, e))
             return None
 
     ###########################################
@@ -427,6 +449,12 @@ class NBA(callbacks.Plugin):
         NBA Scores.
         """
 
+        if self.nextcheck:
+            irc.reply("NEXTCHECK: {0}".format(self.nextcheck))
+
+        ###
+        irc.reply("games: {0}".format(self.games))
+
         url = b64decode('aHR0cDovL2RhdGEubmJhLmNvbS9kYXRhLzEwcy9qc29uL2Ntcy9ub3NlYXNvbi9zY29yZXMvZ2FtZXRyYWNrZXIuanNvbg==')
         html = self._httpget(url)
         if not html:
@@ -504,8 +532,12 @@ class NBA(callbacks.Plugin):
                         finalgame = self._finalgame(v['gamedate'], v['nbaid'])
                         if finalgame:  # we got it. iterate over the keys (teams) and expand values (statlines) for irc.
                             for (fgk, fgv) in finalgame.items():
-                                fgtxt = "{0} :: {1}".format(ircutils.bold(fgk), " :: ".join([ircutils.bold(ik) + " " + str(iv) for (ik, iv) in fgv.items()]))
-                                self._post(irc, fgtxt)
+                                if len(fgv) != 0:  # if items in the dict.
+                                    if isinstance(fgv, list):  # special instance case for DD/TD.
+                                        fgv = " || ".join(fgv)  # join into a string.
+                                    # format the text/string for output.
+                                    fgtxt = "{0} :: {1}".format(ircutils.bold(fgk), fgv)
+                                    self._post(irc, fgtxt)
                         # delete any close60 key if present since the game is over.
                         if k in self.close60:
                             del self.close60[k]
@@ -542,27 +574,34 @@ class NBA(callbacks.Plugin):
 
         # now that we're done. swap games2 into self.games so things reset.
         self.games = games2
+        self.log.info("finished checking.")
         # we're now all done processing the games and resetting. next, we must determine when
         # the nextcheck will be. this is completely dependent on the games and their statuses.
         # there are three conditions that have to be checked and acted on accordingly.
         gamestatuses = set([v['status'] for (k, v) in games2.items()])  # grab statuses from games and unique.
         # main loop.
-        if 2 not in gamestatuses:  # True if no active games are going on.
-            if 1 in gamestatuses:  # no active but games in the future.
-                firstgametime = sorted([v['dt'] for (k, v) in games2.items() if v['status'] == 1])[0]  # sort future games, return the earliest.
-                utcnow = self._utcnow()  # grab UTC now.
+        if (2 in gamestatuses):  # active games.
+            self.nextcheck = None  # basically just reset nextcheck and continue.
+        else:  # no active games. we must determine what our nextcheck should be.
+            utcnow = self._utcnow()  # grab UTC now.
+            if (1 not in gamestatuses):  # this should mean all are done but no future games yet. ie only 3 in gamestatuses.
+                self.log.info("checknba: all games are final but I don't have future games. nextcheck in 10 minutes.")
+                self.nextcheck = utcnow+600  # back off for 10minutes.
+            else:  # no active games but ones in the future. ie: 3 and 1 but not 2.
                 self.log.info("checknba: no active games right now. we will set nextcheck in the future.")
-                if utcnow > firstgametime:  # sanity check to make sure nextcheck is not stale. ie: 8pm tip and its 8:01.
-                    self.nextcheck = utcnow+60  # hold off for 60 seconds incase shit is fubar.
-                    self.log.info("checknba: firstgametime has passed. setting next check for 60 seconds.")
-                else:  # firstgametime = future so we set it.
+                firstgametime = sorted([v['dt'] for (k, v) in games2.items() if v['status'] == 1])[0]  # sort future games, return the earliest.
+                if utcnow > firstgametime:  # if we have passed the first game time (8:01 and start is 8:00)
+                    fgtdiff = abs(firstgametime-utcnow)  # get how long ago the first game should have been.
+                    if fgtdiff < 3601:  # if less than an hour ago, just basically pass.
+                        self.log.info("checknba: firstgametime has passed but is under an hour so we're passing.")
+                        self.nextcheck = None
+                    else:  # over an hour. consider stale.
+                        self.log.info("checknba: firstgametime is over an hour from now so we're going to backoff for 10 minutes.")
+                        self.nextcheck = utcnow+600
+                else:  # firstgametime is in the future. we set based on this time.
                     self.log.info("checknba: firstgametime is in the future. we're setting it {0} seconds from now.".format(firstgametime-utcnow))
                     self.nextcheck = firstgametime
-            else:  # no 1 and no 2 so there is only 3 (final).
-                self.log.info("checknba: all games are final but I don't have future games. nextcheck in 10 minutes.")
-                self.nextcheck = utcnow+600
-        else:  # we have activegames going on. all we do is erase any nextcheck and continue.
-            self.nextcheck = None
+
 
 Class = NBA
 
