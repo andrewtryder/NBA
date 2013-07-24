@@ -585,6 +585,7 @@ class NBA(callbacks.Plugin):
         else:  # no active games. we must determine what our nextcheck should be.
             utcnow = self._utcnow()  # grab UTC now.
             if (1 not in gamestatuses):  # this should mean all are done but no future games yet. ie only 3 in gamestatuses.
+                # we need to check here if 3 is the only thing in the subset.
                 self.log.info("checknba: all games are final but I don't have future games. nextcheck in 10 minutes.")
                 self.nextcheck = utcnow+600  # back off for 10minutes.
             else:  # no active games but ones in the future. ie: 3 and 1 but not 2.
