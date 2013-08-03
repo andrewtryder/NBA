@@ -163,6 +163,12 @@ class NBA(callbacks.Plugin):
             return None
         # process json.
         jsonf = json.loads(html.decode('utf-8'))
+        # make sure we have games. this happens in the offseason.
+        if 'game' not in jsonf['sports_content']:
+            self.log.error("_fetchgames :: I did not even find games. Setting next check for one day.")
+            self.nextcheck = self._utcnow() + 86400
+            return None
+        # also check for "games".
         games = jsonf['sports_content']['game']
         if len(games) == 0:
             self.log.error("_fetchgames :: I found no games in the json data.")
@@ -399,10 +405,6 @@ class NBA(callbacks.Plugin):
                 irc.reply("ERROR: I do not have {0} in {1}".format(optarg, optchannel))
 
     nbachannel = wrap(nbachannel, [('checkCapability', 'admin'), ('somethingWithoutSpaces'), optional('channel')])
-
-    ###################
-    # PUBLIC COMMANDS #
-    ###################
 
     def nbaon(self, irc, msg, args, channel):
         """
