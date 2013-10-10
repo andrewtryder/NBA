@@ -161,41 +161,45 @@ class NBA(callbacks.Plugin):
         if not html:
             self.log.error("ERROR: Could not _fetchgames.")
             return None
-        # process json.
-        jsonf = json.loads(html.decode('utf-8'))
-        # make sure we have games. this happens in the offseason.
-        if 'game' not in jsonf['sports_content']:
-            self.log.error("_fetchgames :: I did not even find games. Setting next check for one day.")
-            self.nextcheck = self._utcnow() + 86400
+        # process json. throw this thing in a try/except block because I have no clue if it will break like nfl.com does.
+        try:
+            jsonf = json.loads(html.decode('utf-8'))
+            # make sure we have games. this happens in the offseason.
+            if 'game' not in jsonf['sports_content']:
+                self.log.error("_fetchgames :: I did not even find games. Setting next check for one day.")
+                self.nextcheck = self._utcnow() + 86400
+                return None
+            # also check for "games".
+            games = jsonf['sports_content']['game']
+            if len(games) == 0:
+                self.log.error("_fetchgames :: I found no games in the json data.")
+                return None
+            # dict for output.
+            gd = {}
+            # iterate over each game, extract out json, and throw into a dict.
+            for game in games:
+                dt = self._convertUTC(game['date']+game['time'])  # times in eastern.
+                nbaid = game['id']  # unique ID. need it for finalgame.
+                gamedate = game['date']  # need for finalgame.
+                hometeam = game['home']['abbreviation']
+                homescore = game['home']['score']
+                awayteam = game['visitor']['abbreviation']
+                awayscore = game['visitor']['score']
+                status = int(game['period_time']['game_status'])  # numeric status.
+                statustext = game['period_time']['period_status']  # text status like Halftime.
+                statusclock = game['period_time']['game_clock']  # text clock.
+                statusperiod = game['period_time']['period_value']  # quarter.
+                gameid = gamedate+game['time']+awayteam+hometeam  # generate our own ids.
+                # add the dict.
+                gd[gameid] = {'dt':dt, 'hometeam':hometeam, 'homescore':homescore,
+                              'awayteam':awayteam, 'awayscore':awayscore, 'status':status,
+                              'statustext':statustext, 'statusclock':statusclock,
+                              'statusperiod':statusperiod, 'nbaid':nbaid, 'gamedate':gamedate }
+            # now return games.
+            return gd
+        except Exception, e:
+            self.log.info("_fetchgames: ERROR fetching games :: {0}".format(e))
             return None
-        # also check for "games".
-        games = jsonf['sports_content']['game']
-        if len(games) == 0:
-            self.log.error("_fetchgames :: I found no games in the json data.")
-            return None
-        # dict for output.
-        gd = {}
-        # iterate over each game, extract out json, and throw into a dict.
-        for game in games:
-            dt = self._convertUTC(game['date']+game['time'])  # times in eastern.
-            nbaid = game['id']  # unique ID. need it for finalgame.
-            gamedate = game['date']  # need for finalgame.
-            hometeam = game['home']['abbreviation']
-            homescore = game['home']['score']
-            awayteam = game['visitor']['abbreviation']
-            awayscore = game['visitor']['score']
-            status = int(game['period_time']['game_status'])  # numeric status.
-            statustext = game['period_time']['period_status']  # text status like Halftime.
-            statusclock = game['period_time']['game_clock']  # text clock.
-            statusperiod = game['period_time']['period_value']  # quarter.
-            gameid = gamedate+game['time']+awayteam+hometeam  # generate our own ids.
-            # add the dict.
-            gd[gameid] = {'dt':dt, 'hometeam':hometeam, 'homescore':homescore,
-                          'awayteam':awayteam, 'awayscore':awayscore, 'status':status,
-                          'statustext':statustext, 'statusclock':statusclock,
-                          'statusperiod':statusperiod, 'nbaid':nbaid, 'gamedate':gamedate }
-        # now return games.
-        return gd
 
     def _finalgame(self, gamedate, gameid):
         """Grabs the boxscore json and prints a final statline."""
@@ -446,43 +450,6 @@ class NBA(callbacks.Plugin):
 
     nbaoff = wrap(nbaoff, [('channel')])
 
-    def nbascores(self, irc, msg, args):
-        """
-        NBA Scores.
-        """
-
-        if self.nextcheck:
-            irc.reply("NEXTCHECK: {0}".format(self.nextcheck))
-
-        ###
-        irc.reply("games: {0}".format(self.games))
-
-        url = b64decode('aHR0cDovL2RhdGEubmJhLmNvbS9kYXRhLzEwcy9qc29uL2Ntcy9ub3NlYXNvbi9zY29yZXMvZ2FtZXRyYWNrZXIuanNvbg==')
-        html = self._httpget(url)
-        if not html:
-            irc.reply("Error fetching: {0}".format(url))
-            return
-        jsonf = json.loads(html.decode('utf-8'))
-        games = jsonf['sports_content']['game']
-        scores = []
-        for game in games:
-            gamestatus = int(game['period_time']['game_status'])
-            awayteam = game['visitor']['abbreviation']
-            awayscore = game['visitor']['score']
-            hometeam = game['home']['abbreviation']
-            homescore = game['home']['score']
-            pstatus = game['period_time']['period_status']
-            ptime = game['period_time']['game_clock']
-            if gamestatus in (1, 2):
-                scores.append("{0} {1} - {2} {3} :: {4} {5}".format(awayteam, awayscore, hometeam, homescore, pstatus, ptime))
-
-        if len(games) != 0:
-            irc.reply(" | ".join([i for i in scores]))
-        else:
-            irc.reply("No NBA games.")
-
-    nbascores = wrap(nbascores)
-
     #############
     # MAIN LOOP #
     #############
@@ -520,7 +487,7 @@ class NBA(callbacks.Plugin):
         # we go through and have to match specific conditions based on json changes.
         for (k, v) in games1.items():  # iterate over games.
             if k in games2:  # must mate keys between games1 and games2.
-                # first, check for status changes.
+                # GAME STATUS CHANGES: IE: START OR FINISH.
                 if (v['status'] != games2[k]['status']):
                     if ((v['status'] == 1) and (games2[k]['status'] == 2)):  # 1-> 2 means the game started.
                         self.log.info("checknba: begin tracking {0}".format(k))
@@ -567,7 +534,7 @@ class NBA(callbacks.Plugin):
                         if (games2[k]['statustext'] == "3rd Qtr"):
                             mstr = self._endhalftime(v)
                             self._post(irc, mstr)
-                    # HANDLE NOTIFICATION IF THERE IS A CLOSE GAME.
+                    # HANDLE NOTIFICATION IF THERE IS A CLOSE GAME. WE USE A SPECIAL DICT TO MAKE SURE WE DO NOT REPEAT.
                     if ((int(games2[k]['statusperiod']) > 3) and (self._gctosec(games2[k]['statusclock']) < 60) and (abs(int(games2[k]['awayscore'])-int(games2[k]['homescore'])) < 8)):
                         if k not in self.close60:  # make sure we're not repeating.
                             self.close60[k] = True  # set key so we do not repeat.
@@ -576,7 +543,7 @@ class NBA(callbacks.Plugin):
 
         # now that we're done. swap games2 into self.games so things reset.
         self.games = games2
-        self.log.info("finished checking.")
+        #self.log.info("finished checking.")
         # we're now all done processing the games and resetting. next, we must determine when
         # the nextcheck will be. this is completely dependent on the games and their statuses.
         # there are three conditions that have to be checked and acted on accordingly.
@@ -584,7 +551,7 @@ class NBA(callbacks.Plugin):
         # main loop.
         if (2 in gamestatuses):  # active games.
             self.nextcheck = None  # basically just reset nextcheck and continue.
-        else:  # no active games. we must determine what our nextcheck should be.
+        else:  # no active games. games are only in the future or completed.  we must determine what our nextcheck should be.
             utcnow = self._utcnow()  # grab UTC now.
             if (1 not in gamestatuses):  # this should mean all are done but no future games yet. ie only 3 in gamestatuses.
                 # we need to check here if 3 is the only thing in the subset.
@@ -596,10 +563,10 @@ class NBA(callbacks.Plugin):
                 if utcnow > firstgametime:  # if we have passed the first game time (8:01 and start is 8:00)
                     fgtdiff = abs(firstgametime-utcnow)  # get how long ago the first game should have been.
                     if fgtdiff < 3601:  # if less than an hour ago, just basically pass.
-                        self.log.info("checknba: firstgametime has passed but is under an hour so we're passing.")
+                        self.log.info("checknba: firstgametime has passed ({0}s ago) but is under an hour so we're passing.".format(fgtdiff))
                         self.nextcheck = None
                     else:  # over an hour. consider stale.
-                        self.log.info("checknba: firstgametime is over an hour from now so we're going to backoff for 10 minutes.")
+                        self.log.info("checknba: firstgametime is over an hour late ({0}s) so we're going to backoff for 10 minutes.".format(fgtdiff))
                         self.nextcheck = utcnow+600
                 else:  # firstgametime is in the future. we set based on this time.
                     self.log.info("checknba: firstgametime is in the future. we're setting it {0} seconds from now.".format(firstgametime-utcnow))
