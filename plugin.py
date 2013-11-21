@@ -42,14 +42,20 @@ class NBA(callbacks.Plugin):
         self.nextcheck = None
         # now do our initial run.
         if not self.games:
-            self.games = self._fetchgames()
+            g = self._fetchgames()  # fetch our stuff.
+            if g:  # if we get something back.
+                self.games = g['games']
+            # self.games = self._fetchgames()
         # now setup the empty channels dict.
-        self.close60 = {}
         self.channels = {}
         self._loadpickle()  # load saved data into channels.
         # now setup the cron.
         def checknbacron():
-            self.checknba(irc)
+            try:
+                self.checknba(irc)
+            except Exception, e:
+                self.log.error("cron: ERROR: {0}".format(e))
+                self.nextcheck = self._utcnow()+72000
         try:
             schedule.addPeriodicEvent(checknbacron, self.registryValue('checkInterval'), now=False, name='checknba')
         except AssertionError:
@@ -70,17 +76,15 @@ class NBA(callbacks.Plugin):
     # INTERNAL COMMANDS #
     #####################
 
-    def _httpget(self, url, h=None, d=None, l=True):
-        """General HTTP resource fetcher. Pass headers via h, data via d, and to log via l."""
+    def _httpget(self, url):
+        """General HTTP resource fetcher."""
 
-        if self.registryValue('logURLs') and l:
+        if self.registryValue('logURLs'):
             self.log.info(url)
 
         try:
-            if h and d:
-                page = utils.web.getUrl(url, headers=h, data=d)
-            else:
-                page = utils.web.getUrl(url)
+            headers = {"User-Agent":"Mozilla/5.0 (X11; Ubuntu; Linux i686; rv:17.0) Gecko/20100101 Firefox/17.0"}
+            page = utils.web.getUrl(url, headers=headers)
             return page
         except utils.web.Error as e:
             self.log.error("ERROR opening {0} message: {1}".format(url, e))
@@ -156,8 +160,7 @@ class NBA(callbacks.Plugin):
         """Returns a list of games."""
 
         url = b64decode('aHR0cDovL2RhdGEubmJhLmNvbS9kYXRhLzEwcy9qc29uL2Ntcy9ub3NlYXNvbi9zY29yZXMvZ2FtZXRyYWNrZXIuanNvbg==')
-        headers = {"User-Agent":"Mozilla/5.0 (X11; Ubuntu; Linux i686; rv:17.0) Gecko/20100101 Firefox/17.0"}
-        html = self._httpget(url, h=headers)
+        html = self._httpget(url)
         if not html:
             self.log.error("ERROR: Could not _fetchgames.")
             return None
@@ -174,8 +177,9 @@ class NBA(callbacks.Plugin):
             if len(games) == 0:
                 self.log.error("_fetchgames :: I found no games in the json data.")
                 return None
-            # dict for output.
+            # containers for output.
             gd = {}
+            gd['games'] = {}
             # iterate over each game, extract out json, and throw into a dict.
             for game in games:
                 dt = self._convertUTC(game['date']+game['time'])  # times in eastern.
@@ -191,33 +195,63 @@ class NBA(callbacks.Plugin):
                 statusperiod = game['period_time']['period_value']  # quarter.
                 gameid = gamedate+game['time']+awayteam+hometeam  # generate our own ids.
                 # add the dict.
-                gd[gameid] = {'dt':dt, 'hometeam':hometeam, 'homescore':homescore,
+                gd['games'][gameid] = {'dt':dt, 'hometeam':hometeam, 'homescore':homescore,
                               'awayteam':awayteam, 'awayscore':awayscore, 'status':status,
                               'statustext':statustext, 'statusclock':statusclock,
                               'statusperiod':statusperiod, 'nbaid':nbaid, 'gamedate':gamedate }
+            # lets also grab sportsmeta.
+            sc = jsonf['sports_content']['sports_meta']['season_meta']
+            gd['meta'] = sc
             # now return games.
             return gd
         except Exception, e:
             self.log.info("_fetchgames: ERROR fetching games :: {0}".format(e))
             return None
 
+    def _standings(self, optyear):
+        """Fetches standings."""
+
+        url = b64decode('aHR0cDovL2RhdGEubmJhLmNvbS9qc29uL2Ntcy8=') + optyear + '/standings/division.json'
+        html = self._httpget(url)
+        if not html:
+            self.log.error("ERROR: Could not _finalgame.")
+            return None
+        # we should get back json. big try/except.
+        try:
+            tree = json.loads(html.decode('utf-8'))
+            # container for output.
+            ts = {}
+            # lets now find/parse the json.
+            confs = tree['sports_content']['standings']['conferences']
+            for conf in confs:  # iterate over confs.
+                divs = confs[conf]['divisions']
+                for div in divs:  # iterate over divs.
+                    teams =  confs[conf]['divisions'][div]['team']
+                    for team in teams:  # iterate over teams and populate.
+                        tm = team['abbreviation']
+                        ts[tm] = team
+            # now return the dict.
+            return ts
+        except Exception, e:  # something went wrong.
+            self.log.error("_standings :: ERROR :: {0}".format(e))
+            return None
+
     def _finalgame(self, gamedate, gameid):
         """Grabs the boxscore json and prints a final statline."""
 
         url = b64decode('aHR0cDovL2RhdGEubmJhLmNvbS9qc29uL2Ntcy9ub3NlYXNvbi9nYW1lLw==') + '%s/%s/boxscore.json' % (str(gamedate), str(gameid))
-        headers = {"User-Agent":"Mozilla/5.0 (X11; Ubuntu; Linux i686; rv:17.0) Gecko/20100101 Firefox/17.0"}
-        html = self._httpget(url, h=headers)
+        html = self._httpget(url)
         if not html:
             self.log.error("ERROR: Could not _finalgame.")
             return None
-        # process json.
-        jsonf = json.loads(html.decode('utf-8'))
-        game = jsonf['sports_content']['game']
-        if len(game) == 0:
-            self.log.error("_finalgame :: I found no games in the json data.")
-            return None
-        # throw this thing in a try/except block.
+        # process json. throw this thing in a try/except block.
         try:
+            jsonf = json.loads(html.decode('utf-8'))
+            game = jsonf['sports_content']['game']
+            if len(game) == 0:
+                self.log.error("_finalgame :: I found no games in the json data.")
+                return None
+
             # output dict. we preset DD/TD for later.
             gamestats = {'Double-double':[], 'Triple-double':[]}
             # iterate over the home/visitor.
@@ -296,10 +330,31 @@ class NBA(callbacks.Plugin):
         else:  # tie.
             return "{0} {1} {2} {3}".format(awayteam, awayscore, hometeam, homescore)
 
-    def _begingame(self, ev):
-        """Handle start of game event."""
+    def _begingame(self, ev, m=None):
+        """Handle start of game event. m = dict of team records."""
 
-        mstr = "{0}@{1} :: {2}".format(ev['awayteam'], ev['hometeam'], ircutils.mircColor("TIPOFF", 'green'))
+        if m:  # we have metadata dict.
+            # NOP :: {u'name': u'New Orleans', u'abbreviation': u'NOP',
+            # u'team_stats': {u'streak': u'W 4', u'rank': u'1', u'gb_conf': u'0.0', u'conf_win_loss': u'2-0',
+            # u'clinched_division': u'0', u'wins': u'4', u'losses': u'0', u'l10': u'4-0', u'streak_num': u'4',
+            # 'u'pct': u'1.000', u'div_rank': u'1', u'clinched_conference': u'0', u'gb_div': u'0.0',
+            # u'home': u'1-0', u'div_win_loss': u'2-0', u'clinched_playoffs': u'0', u'road': u'3-0'},
+            # u'team_key': u'New Orleans', u'nickname': u'Pelicans', u'id': u'1610612740'}
+            # handle awayteam.
+            if ev['awayteam'] in m:  # awayteam is found inside.
+                at = "{0} ({1}-{2}, {3} away)".format(ev['awayteam'], m[ev['awayteam']]['team_stats']['wins'], m[ev['awayteam']]['team_stats']['losses'], m[ev['awayteam']]['team_stats']['road'])  # (3-7, 1-5 away)"
+            else:  # awaytea mwas NOT found in dict.
+                at = ev['awayteam']
+            # handle hometeam.
+            if ev['hometeam'] in m:  # awayteam is found inside.
+                ht = "{0} ({1}-{2}, {3} home)".format(ev['hometeam'], m[ev['hometeam']]['team_stats']['wins'], m[ev['hometeam']]['team_stats']['losses'], m[ev['hometeam']]['team_stats']['home'])
+            else:  # awaytea mwas NOT found in dict.
+                ht = ev['hometeam']
+            # now construct.
+            mstr = "{0}@{1} :: {2}".format(at, ht, ircutils.mircColor("TIPOFF", 'green'))
+        else:  # NO METADATA. JUST POST STARTGAME.
+            mstr = "{0}@{1} :: {2}".format(ev['awayteam'], ev['hometeam'], ircutils.mircColor("TIPOFF", 'green'))
+        # return.
         return mstr
 
     def _endgame(self, ev):
@@ -455,6 +510,7 @@ class NBA(callbacks.Plugin):
     #############
 
     def checknba(self, irc):
+    #def checknba(self, irc, msg, args):
         """
         Main loop.
         """
@@ -463,24 +519,32 @@ class NBA(callbacks.Plugin):
         if self.nextcheck:  # set
             utcnow = self._utcnow()
             if self.nextcheck > utcnow:  # in the future so we backoff.
+                self.log.info("checknba: nextcheck is {0}s in the future.".format(self.nextcheck-utcnow))
                 return
             else:  # in the past so lets reset it. this means that we've reached the time where firstgametime should begin.
                 self.log.info("checknba: nextcheck has passed. we are resetting and continuing normal operations.")
                 self.nextcheck = None
         # we must have initial games. bail if not.
+        # games + meta.
         if not self.games:
-            self.games = self._fetchgames()
-            return
-        # check and see if we have initial games, again, but bail if no.
+            g = self._fetchgames()  # fetch our stuff.
+            if (g and 'games' in g):  # if we get something back.
+                self.games = g['games']  # games1
+        # check and see if we have initial games, again, but bail if not.
         if not self.games:
-            self.log.error("checknba: I did not have any games in self.games")
+            self.log.error("checknba: ERROR: I did not have any games in self.games")
             return
         else:  # setup the initial games.
             games1 = self.games
-        # now we must grab the new status.
-        games2 = self._fetchgames()
-        if not games2:  # something went wrong so we bail.
-            self.log.error("checknba: fetching games2 failed.")
+        # now we must grab the new status to compare with.
+        g = self._fetchgames()  # fetch our stuff.
+        # make sure we get something back.
+        if ((g) and ('games' in g) and ('meta' in g)):
+            games2 = g['games']  # games
+            meta = g['meta']  # metadata.
+            #self.log.info("META: {0}".format(meta))
+        else:  # something went wrong so we bail.
+            self.log.error("checknba: ERROR: fetching games2 failed.")
             return
 
         # main handler for event changes.
@@ -491,7 +555,19 @@ class NBA(callbacks.Plugin):
                 if (v['status'] != games2[k]['status']):
                     if ((v['status'] == 1) and (games2[k]['status'] == 2)):  # 1-> 2 means the game started.
                         self.log.info("checknba: begin tracking {0}".format(k))
-                        mstr = self._begingame(games2[k])
+                        # now, we use the metadata above and check if stage is in "2" (regular season).
+                        # no checks for meta because if meta does not exist, it will fail above.
+                        if meta['season_stage'] == "2":  # we're in regular season.
+                            # fetch the dict of regular season standings.
+                            optyear = meta['standings_season_year']  # fetch the year.
+                            standings = self._standings(optyear)  # http call to the standings.
+                            if standings:   # if we get something back, feed meta into begingame.
+                                mstr = self._begingame(games2[k], m=standings)
+                            else:  # something broke fetching standings.
+                                mstr = self._begingame(games2[k], m=None)
+                        else:
+                            mstr = self._begingame(games2[k], m=None)
+                        # we're done. post the begin game.
                         self._post(irc, mstr)
                     elif ((v['status'] == 2) and (games2[k]['status'] == 3)):  # 2-> 3 means the game ended.
                         self.log.info("checknba: endgame tracking {0}".format(k))
@@ -507,9 +583,6 @@ class NBA(callbacks.Plugin):
                                     # format the text/string for output.
                                     fgtxt = "{0} :: {1}".format(ircutils.bold(fgk), fgv)
                                     self._post(irc, fgtxt)
-                        # delete any close60 key if present since the game is over.
-                        if k in self.close60:
-                            del self.close60[k]
                 # BELOW ARE EVENTS THAT CAN ONLY HAPPEN WHEN A GAME IS ACTIVE.
                 elif ((v['status'] == 2) and (games2[k]['status'] == 2)):
                     # START OF OVERTIME QUARTER.
@@ -534,16 +607,14 @@ class NBA(callbacks.Plugin):
                         if (games2[k]['statustext'] == "3rd Qtr"):
                             mstr = self._endhalftime(v)
                             self._post(irc, mstr)
-                    # HANDLE NOTIFICATION IF THERE IS A CLOSE GAME. WE USE A SPECIAL DICT TO MAKE SURE WE DO NOT REPEAT.
-                    if ((int(games2[k]['statusperiod']) > 3) and (self._gctosec(games2[k]['statusclock']) < 60) and (abs(int(games2[k]['awayscore'])-int(games2[k]['homescore'])) < 8)):
-                        if k not in self.close60:  # make sure we're not repeating.
-                            self.close60[k] = True  # set key so we do not repeat.
-                            mstr = self._closegame(games2[k])
-                            self._post(irc, mstr)
+                    # HANDLE NOTIFICATION IF THERE IS A CLOSE GAME. ONLY FIRES AT UNDER 60S LEFT in 4TH QUARTER OR GREATER.
+                    if ((int(games2[k]['statusperiod']) > 3) and (self._gctosec(v['statusclock']) >= 60) and (self._gctosec(games2[k]['statusclock']) < 60) and (abs(int(games2[k]['awayscore'])-int(games2[k]['homescore'])) < 8)):
+                        mstr = self._closegame(games2[k])
+                        self._post(irc, mstr)
 
         # now that we're done. swap games2 into self.games so things reset.
         self.games = games2
-        #self.log.info("finished checking.")
+        self.log.info("finished checking.")
         # we're now all done processing the games and resetting. next, we must determine when
         # the nextcheck will be. this is completely dependent on the games and their statuses.
         # there are three conditions that have to be checked and acted on accordingly.
@@ -572,6 +643,7 @@ class NBA(callbacks.Plugin):
                     self.log.info("checknba: firstgametime is in the future. we're setting it {0} seconds from now.".format(firstgametime-utcnow))
                     self.nextcheck = firstgametime
 
+    #checknba = wrap(checknba)
 
 Class = NBA
 
