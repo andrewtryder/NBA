@@ -1,5 +1,5 @@
 ###
-# Copyright (c) 2013, spline
+# Copyright (c) 2013-2014, spline
 # All rights reserved.
 #
 #
@@ -86,7 +86,7 @@ class NBA(callbacks.Plugin):
             headers = {"User-Agent":"Mozilla/5.0 (X11; Ubuntu; Linux i686; rv:17.0) Gecko/20100101 Firefox/17.0"}
             page = utils.web.getUrl(url, headers=headers)
             return page
-        except utils.web.Error as e:
+        except Exception, e:
             self.log.error("ERROR opening {0} message: {1}".format(url, e))
             return None
 
@@ -97,7 +97,11 @@ class NBA(callbacks.Plugin):
             l = s.split(':')
             return int(int(l[0]) * 60 + int(l[1]))
         else:
-            return int(round(float(s)))
+            try:
+                return int(round(float(s)))
+            except Exception, e:  # this seems to popup.
+                self.log.info("_gctosec :: ERROR :: could not convert: {0} to float: {1}".format(s, e))
+                return s
 
     ##########################
     # CHANNEL SAVE INTERNALS #
@@ -573,6 +577,8 @@ class NBA(callbacks.Plugin):
                         self.log.info("checknba: endgame tracking {0}".format(k))
                         mstr = self._endgame(games2[k])
                         self._post(irc, mstr)
+                        # final game stats and info. should we print it in this channel?
+                        #if self.registryValue('displayGameStats', msg[0]):
                         # try and get finalgame info. print if we do.
                         finalgame = self._finalgame(v['gamedate'], v['nbaid'])
                         if finalgame:  # we got it. iterate over the keys (teams) and expand values (statlines) for irc.
