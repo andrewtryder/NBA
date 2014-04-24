@@ -1,5 +1,5 @@
 ###
-# Copyright (c) 2013, spline
+# Copyright (c) 2013-2014, spline
 # All rights reserved.
 #
 #
@@ -27,6 +27,7 @@ def configure(advanced):
 NBA = conf.registerPlugin('NBA')
 conf.registerGlobalValue(NBA, 'logURLs', registry.Boolean(False, """Should we log all URL calls?"""))
 conf.registerGlobalValue(NBA, 'checkInterval', registry.NonNegativeInteger(20, """Positive Integer in seconds to check."""))
+# conf.registerChannelValue(NBA, 'displayGameStats', registry.Boolean(True, """Should we print gamestats once a game is done?"""))
 
 
 # vim:set shiftwidth=4 tabstop=4 expandtab textwidth=79:
