@@ -198,11 +198,16 @@ class NBA(callbacks.Plugin):
                 statusclock = game['period_time']['game_clock']  # text clock.
                 statusperiod = game['period_time']['period_value']  # quarter.
                 gameid = gamedate+game['time']+awayteam+hometeam  # generate our own ids.
+                # conditional here for playoffs.
+                if 'playoffs' in game:  # found.
+                    playoffs = game['playoffs']
+                else:  # not found.
+                    playoffs = None
                 # add the dict.
                 gd['games'][gameid] = {'dt':dt, 'hometeam':hometeam, 'homescore':homescore,
                               'awayteam':awayteam, 'awayscore':awayscore, 'status':status,
-                              'statustext':statustext, 'statusclock':statusclock,
-                              'statusperiod':statusperiod, 'nbaid':nbaid, 'gamedate':gamedate }
+                              'statustext':statustext, 'statusclock':statusclock, 'statusperiod':statusperiod,
+                              'nbaid':nbaid, 'gamedate':gamedate, 'playoffs':playoffs }
             # lets also grab sportsmeta.
             sc = jsonf['sports_content']['sports_meta']['season_meta']
             gd['meta'] = sc
@@ -334,10 +339,23 @@ class NBA(callbacks.Plugin):
         else:  # tie.
             return "{0} {1} {2} {3}".format(awayteam, awayscore, hometeam, homescore)
 
-    def _begingame(self, ev, m=None):
-        """Handle start of game event. m = dict of team records."""
+    def _begingame(self, ev, m=None, p=None):
+        """Handle start of game event. m = dict of team records for regular season. p = for playoffs"""
 
-        if m:  # we have metadata dict.
+        if p:  # are we in playoffs mode?
+            # EASTERN CONFERENCE 1ST ROUND - GAME 1 - SERIES TIED 0-0
+            if p['round'] in ("1", "2", "3"):  # check round. 1, 2, 3 still conf. 4 = finals.
+                r = p['conference'].upper() + "ERN CONFERENCE"  # EAST/WEST - ERN CONFERENCE.
+            else:
+                r = "NBA Finals"
+            # next, the game.
+            g = "GAME {0}".format(p['game_number'])
+            # now the balance.
+            s = "SERIES {0}-{1}".format(p['visitor_wins'], p['home_wins'])
+            # now lets build the string.
+            mstr = "({0}){1}@({2}){3} :: {4} :: {5} :: {6} :: {7}".format(p['visitor_seed'], ev['awayteam'], p['home_seed'], ev['hometeam'], r, g, s, ircutils.mircColor("TIPOFF", 'green'))
+        elif m:  # we have metadata dict.
+            # this is for season_stage 2 (regular)
             # NOP :: {u'name': u'New Orleans', u'abbreviation': u'NOP',
             # u'team_stats': {u'streak': u'W 4', u'rank': u'1', u'gb_conf': u'0.0', u'conf_win_loss': u'2-0',
             # u'clinched_division': u'0', u'wins': u'4', u'losses': u'0', u'l10': u'4-0', u'streak_num': u'4',
@@ -413,6 +431,20 @@ class NBA(callbacks.Plugin):
         gamestr = self._boldleader(ev['awayteam'], ev['awayscore'], ev['hometeam'], ev['homescore'])
         mstr = "{0} :: End of {1} OT.".format(gamestr, ordinal)
         return mstr
+
+    ##################
+    # DEBUG COMMANDS #
+    ##################
+    
+    def nbadebug(self, irc, msg, args):
+        """
+        DEBUG COMMAND
+        """
+    
+        for (i, g) in self.games.items():
+            irc.reply("{0} :: {1}".format(i, g))
+    
+    nbadebug = wrap(nbadebug)
 
     ###################
     # PUBLIC COMMANDS #
@@ -546,7 +578,7 @@ class NBA(callbacks.Plugin):
         if ((g) and ('games' in g) and ('meta' in g)):
             games2 = g['games']  # games
             meta = g['meta']  # metadata.
-            #self.log.info("META: {0}".format(meta))
+            self.log.info("META: {0}".format(meta))
         else:  # something went wrong so we bail.
             self.log.error("checknba: ERROR: fetching games2 failed.")
             return
@@ -566,11 +598,16 @@ class NBA(callbacks.Plugin):
                             optyear = meta['standings_season_year']  # fetch the year.
                             standings = self._standings(optyear)  # http call to the standings.
                             if standings:   # if we get something back, feed meta into begingame.
-                                mstr = self._begingame(games2[k], m=standings)
+                                mstr = self._begingame(games2[k], m=standings, p=None)
                             else:  # something broke fetching standings.
-                                mstr = self._begingame(games2[k], m=None)
-                        else:
-                            mstr = self._begingame(games2[k], m=None)
+                                mstr = self._begingame(games2[k], m=None, p=None)
+                        elif meta['season_stage'] == "4":  # postseason.
+                            if 'playoffs' in games2[k]:  # if we find the data, send it in.
+                                mstr = self._begingame(games2[k], m=None, p=games2[k]['playoffs'])
+                            else:  # something went wrong.
+                                mstr = self._begingame(games2[k], m=None, p=None)
+                        else:  # other point in the year.
+                            mstr = self._begingame(games2[k], m=None, p=None)
                         # we're done. post the begin game.
                         self._post(irc, mstr)
                     elif ((v['status'] == 2) and (games2[k]['status'] == 3)):  # 2-> 3 means the game ended.
