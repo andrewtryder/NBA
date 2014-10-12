@@ -7,14 +7,12 @@
 
 from supybot.test import *
 
-class NBATestCase(PluginTestCase):
+class NBATestCase(ChannelPluginTestCase):
     plugins = ('NBA',)
     
     def testNBA(self):
-        self.assertNotError('nbachannel add #test')
-        self.assertNotError('nbachannel del #test')
-        self.assertError('nbaon')
-        self.assertError('nbaoff')
+        self.assertResponse('nbachannel add #test', "I have enabled NBA status updates on #test")
+        self.assertResponse('nbachannel del #test', "I have successfully removed #test")
     
 
 
