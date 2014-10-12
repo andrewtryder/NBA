@@ -638,8 +638,9 @@ class NBA(callbacks.Plugin):
                             mstr = self._endquarter(games2[k])
                             self._post(irc, mstr)
                         if (int(games2[k]['statusperiod']) > 4):  # this will only fire when a quarter ends but not end of game.
-                            mstr = self._endotquarter(games2[k])
-                            self._post(irc, mstr)
+                            if (games2[k]['awayscore'] == games2[k]['homescore']):  # only fire this if OT ends in a tie. 
+                                mstr = self._endotquarter(games2[k])
+                                self._post(irc, mstr)
                     # HANDLE GOING IN AND OUT OF HALFTIME.
                     if (v['statustext'] != games2[k]['statustext']):
                         # GAME GOES TO HALFTIME.
