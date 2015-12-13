@@ -156,6 +156,14 @@ class NBA(callbacks.Plugin):
         ttuple = datetime.datetime.utcnow().utctimetuple()
         return timegm(ttuple)
 
+    def _gendt(self):
+        """required for new method into fetchgames to have proper YYYYmmdd format."""
+        
+        gdt = datetime.datetime.utcnow() - datetime.timedelta(hours=9)
+        gdt = gdt.strftime("%Y%m%d")
+        return gdt
+
+
     ###################
     # GAMES INTERNALS #
     ###################
@@ -163,7 +171,7 @@ class NBA(callbacks.Plugin):
     def _fetchgames(self):
         """Returns a list of games."""
 
-        url = b64decode('aHR0cDovL2RhdGEubmJhLmNvbS9kYXRhLzEwcy9qc29uL2Ntcy9ub3NlYXNvbi9zY29yZXMvZ2FtZXRyYWNrZXIuanNvbg==')
+        url = 'http://data.nba.com/json/cms/noseason/scoreboard/{0}/games.json'.format(self._gendt())
         html = self._httpget(url)
         if not html:
             self.log.error("ERROR: Could not _fetchgames.")
@@ -172,15 +180,17 @@ class NBA(callbacks.Plugin):
         try:
             jsonf = json.loads(html.decode('utf-8'))
             # make sure we have games. this happens in the offseason.
-            if 'game' not in jsonf['sports_content']:
-                self.log.error("_fetchgames :: I did not even find games. Setting next check for one day.")
-                self.nextcheck = self._utcnow() + 86400
+            if 'games' not in jsonf['sports_content']:
+                self.log.error("_fetchgames :: I did not even find games. Setting next check 6h from now.")
+                self.nextcheck = self._utcnow() + 21600
                 return None
             # also check for "games".
-            games = jsonf['sports_content']['game']
+            games = jsonf['sports_content']['games']['game']
             if len(games) == 0:
                 self.log.error("_fetchgames :: I found no games in the json data.")
                 return None
+            else:
+                self.log.info("I found {0} games {1}".format(len(games), games))
             # containers for output.
             gd = {}
             gd['games'] = {}
