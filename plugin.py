@@ -189,8 +189,6 @@ class NBA(callbacks.Plugin):
             if len(games) == 0:
                 self.log.error("_fetchgames :: I found no games in the json data.")
                 return None
-            else:
-                self.log.info("I found {0} games {1}".format(len(games), games))
             # containers for output.
             gd = {}
             gd['games'] = {}
